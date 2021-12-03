@@ -1,6 +1,6 @@
 # ROSE (WIP)
 
-ROSE - Rust Object SErver. A server that is supposed to store a lot of files. Now only supports JPEG. 
+ROSE - Rust Object SErver. A server that is supposed to store a lot of files. Now only supports JPEG.
 
 Endpoints:
 
@@ -23,3 +23,9 @@ Content-Type: application/json
     "{UUID}", "{UUID}", ...
 ]
 ```
+
+```.env``` variables that should be set:
+
+- SERVER_ADDRESS
+- IMAGES_DIR
+- RUST_LOG (debug, info, trace, warn)
