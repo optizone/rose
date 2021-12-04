@@ -1,9 +1,17 @@
-use std::{path::PathBuf, sync::Arc, time::Duration};
+use std::{
+    ops::DerefMut,
+    path::PathBuf,
+    pin::Pin,
+    sync::Arc,
+    task::{Context, Poll},
+    time::Duration,
+};
 
+use either::Either;
 use thiserror::Error;
 use tokio::{
-    fs::OpenOptions,
-    io::{AsyncReadExt, AsyncWriteExt, BufWriter},
+    fs::{File, OpenOptions},
+    io::{self, AsyncRead, AsyncWriteExt, BufReader, BufWriter, ReadBuf},
 };
 use uuid::Uuid;
 
@@ -14,6 +22,35 @@ use cache::*;
 pub struct ImageManager {
     path: PathBuf,
     cache: Cache,
+}
+
+pub struct CachedImage {
+    data: Arc<Vec<u8>>,
+    pos: usize,
+}
+
+impl AsyncRead for CachedImage {
+    fn poll_read(
+        mut self: Pin<&mut Self>,
+        _: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        let rem = &self.data.as_slice()[self.pos..];
+        let amt = std::cmp::min(buf.remaining(), self.data.len() - self.pos);
+        let put = &rem[..amt];
+        buf.put_slice(put);
+        self.deref_mut().pos += amt;
+        Poll::Ready(Ok(()))
+    }
+}
+
+impl From<Arc<Vec<u8>>> for CachedImage {
+    fn from(cached: Arc<Vec<u8>>) -> Self {
+        Self {
+            data: cached,
+            pos: 0,
+        }
+    }
 }
 
 impl ImageManager {
@@ -39,31 +76,17 @@ impl ImageManager {
             .join(format!("{}.jpeg", uuid.to_string()))
     }
 
-    pub async fn get(&self, uuid: Uuid) -> Result<Arc<Vec<u8>>, Error> {
+    pub async fn get(&self, uuid: Uuid) -> Result<Either<BufReader<File>, CachedImage>, Error> {
         if let Some(cached) = self.cache.get(uuid) {
-            return Ok(cached);
+            return Ok(Either::Right(cached.into()));
         }
 
         let path = self.uuid_to_path(uuid);
         let file = OpenOptions::new().read(true).open(path).await?;
 
-        let size = file
-            .metadata()
-            .await
-            .map(|m| m.len())
-            .unwrap_or(2 * 1024 * 1024);
+        let reader = BufReader::new(file);
 
-        let mut reader = tokio::io::BufReader::new(file);
-        let mut buf = Vec::with_capacity(size as usize);
-
-        reader.read_to_end(&mut buf).await?;
-
-        let buf = Arc::new(buf);
-        let copy = Arc::clone(&buf);
-
-        self.cache.insert(uuid, copy);
-
-        Ok(buf)
+        Ok(Either::Left(reader))
     }
 
     pub async fn insert(&self, uuid: Uuid, data: Vec<u8>) -> Result<(), Error> {

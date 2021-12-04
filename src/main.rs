@@ -3,13 +3,13 @@
 mod error;
 pub mod image_manager;
 
-use std::ops::Deref;
-
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
+use either::Either;
 use error::Result;
 use futures_util::stream::StreamExt as _;
 use image_manager::ImageManager;
 use jemallocator::Jemalloc;
+use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 #[global_allocator]
@@ -21,9 +21,15 @@ async fn index() -> HttpResponse {
 }
 
 async fn get(im: web::Data<ImageManager>, uuid: web::Path<Uuid>) -> Result<HttpResponse> {
-    let res = im.get(uuid.into_inner()).await?;
-    let data = res.deref().clone();
-    Ok(HttpResponse::Ok().content_type(mime::IMAGE_JPEG).body(data))
+    match im.get(uuid.into_inner()).await? {
+        Either::Left(f) => Ok(HttpResponse::Ok()
+            .content_type(mime::IMAGE_JPEG)
+            .streaming(ReaderStream::new(f))),
+        Either::Right(v) => Ok(HttpResponse::Ok()
+            .content_type(mime::IMAGE_JPEG)
+            // TODO stream from arc directly
+            .streaming(ReaderStream::new(v))),
+    }
 }
 
 async fn post(
