@@ -4,13 +4,11 @@ pub type Result<T> = actix_web::error::Result<T, Error>;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("{0}")]
-    ImageManager(#[from] crate::image_manager::Error),
+    #[error("Io error: {0}")]
+    Io(#[from] tokio::io::Error),
 
-    #[error("{0}")]
+    #[error("Actix error: {0}")]
     Payload(#[from] actix_web::error::PayloadError),
-    // #[error("unknown error")]
-    // Unknown,
 }
 impl ResponseError for Error {
     fn status_code(&self) -> StatusCode {
@@ -23,8 +21,7 @@ impl ResponseError for Error {
     fn error_response(&self) -> actix_web::HttpResponse {
         match &self {
             Error::Payload(e) => e.error_response(),
-            Error::ImageManager(e) => HttpResponse::InternalServerError().body(e.to_string()),
-            // Error::Unknown => HttpResponse::InternalServerError().finish(),
+            Error::Io(e) => HttpResponse::InternalServerError().body(e.to_string()),
         }
     }
 }

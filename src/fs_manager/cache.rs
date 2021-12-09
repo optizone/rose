@@ -103,13 +103,14 @@ impl Cache {
         }
     }
 
-    pub fn get(&self, uuid: Uuid) -> Option<Arc<Vec<u8>>> {
+    pub fn get(&self, uuid: &Uuid) -> Option<Arc<Vec<u8>>> {
         self.read_handle
             .enter()
             .expect("Write guard must not be dropped at this point!")
-            .get(&uuid)
+            .get(uuid)
             .map(|(_, d)| {
                 let writer = self.tx.clone();
+                let uuid = *uuid;
                 actix_rt::spawn(async move { writer.send(CacheOp::Refresh(uuid)).await });
                 Arc::clone(d)
             })

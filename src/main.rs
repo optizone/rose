@@ -1,15 +1,13 @@
 #![feature(hash_drain_filter)]
 
 mod error;
-pub mod image_manager;
+pub mod fs_manager;
 
 use actix_web::{middleware::Logger, web, App, HttpResponse, HttpServer};
-use either::Either;
 use error::Result;
-use futures_util::stream::StreamExt as _;
-use image_manager::ImageManager;
+use fs_manager::FsManager;
+use futures_util::stream::StreamExt;
 use jemallocator::Jemalloc;
-use tokio_util::io::ReaderStream;
 use uuid::Uuid;
 
 #[global_allocator]
@@ -20,36 +18,34 @@ async fn index() -> HttpResponse {
     HttpResponse::Ok().body("Hello, world!")
 }
 
-async fn get(im: web::Data<ImageManager>, uuid: web::Path<Uuid>) -> Result<HttpResponse> {
-    match im.get(uuid.into_inner()).await? {
-        Either::Left(f) => Ok(HttpResponse::Ok()
-            .content_type(mime::IMAGE_JPEG)
-            .streaming(ReaderStream::new(f))),
-        Either::Right(v) => Ok(HttpResponse::Ok()
-            .content_type(mime::IMAGE_JPEG)
-            // TODO stream from arc directly
-            .streaming(ReaderStream::new(v))),
-    }
+async fn get(im: web::Data<FsManager>, uuid: web::Path<Uuid>) -> Result<HttpResponse> {
+    let data = im.get(uuid.into_inner(), "jpeg").await?;
+    Ok(HttpResponse::Ok()
+        .content_type(mime::IMAGE_JPEG)
+        .streaming(data))
 }
 
 async fn post(
-    im: web::Data<ImageManager>,
+    im: web::Data<FsManager>,
     uuid: web::Path<Uuid>,
-    mut body: web::Payload,
+    body: web::Payload,
 ) -> Result<HttpResponse> {
-    let mut bytes = web::BytesMut::new();
-    while let Some(item) = body.next().await {
-        bytes.extend_from_slice(&item?);
-    }
-    im.insert(uuid.into_inner(), bytes.to_vec()).await?;
+    im.insert(
+        uuid.into_inner(),
+        body.map(|b| b.map_err(|e| e.into())),
+        "jpeg",
+    )
+    .await?;
     Ok(HttpResponse::Ok().finish())
 }
 
 async fn update_cache(
-    im: web::Data<ImageManager>,
-    uuids: web::Json<Vec<Uuid>>,
+    im: web::Data<FsManager>,
+    uuids: web::Json<Vec<(Uuid, String)>>,
 ) -> Result<HttpResponse> {
-    im.load_cache(uuids.into_inner()).await?;
+    let uuids = uuids.into_inner();
+    let uuids = uuids.iter().map(|(id, ext)| (*id, ext.as_str())).collect();
+    im.load_cache(uuids).await?;
     Ok(HttpResponse::Ok().finish())
 }
 
@@ -59,7 +55,7 @@ async fn main() -> std::io::Result<()> {
     pretty_env_logger::init_timed();
     let address = std::env::var("SERVER_ADDRESS").unwrap();
 
-    let im = ImageManager::new();
+    let im = FsManager::from_env();
 
     HttpServer::new(move || {
         App::new()
@@ -68,7 +64,7 @@ async fn main() -> std::io::Result<()> {
             .route("/", web::get().to(index))
             .route("/images/{uuid}", web::post().to(post))
             .route("/images/{uuid}", web::get().to(get))
-            .route("/api/update_cache", web::post().to(update_cache))
+            .route("/api/force_load_cache", web::post().to(update_cache))
     })
     .bind(address)?
     .run()
